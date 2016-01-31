@@ -1,0 +1,19 @@
+{
+    "compilerOptions": {
+        "module": "commonjs",
+        "target": "es5",
+        "noImplicitAny": false,
+        "outDir": "",
+        "rootDir": ".",
+        "sourceMap": false,
+        "declaration": true
+    },
+    "exclude": [
+        "node_modules"
+    ],
+    "files": [
+        "express-theme.ts",
+        "typings/main.d.ts",
+        "typings/custom.d.ts"
+    ]
+}

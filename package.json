@@ -1,0 +1,28 @@
+{
+  "name": "express-theme",
+  "version": "0.0.0",
+  "description": "express.js middleware that aim to create structured and simple theme",
+  "main": "express-theme.js",
+  "scripts": {
+    "build": "./node_modules/.bin/tsc",
+    "install": "./node_modules/.bin/typings install"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JumpLink/express-theme.git"
+  },
+  "author": "Pascal Garber",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/JumpLink/express-theme/issues"
+  },
+  "homepage": "https://github.com/JumpLink/express-theme#readme",
+  "dependencies": {
+    "express": "~4.13.1",
+    "jade": "~1.11.0",
+    "morgan": "~1.6.1",
+    "node-sass-middleware": "0.8.0",
+    "typescript": "^1.7.5",
+    "typings": "^0.6.3"
+  }
+}
