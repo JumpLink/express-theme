@@ -6,32 +6,67 @@ var path = require('path');
 var _ = require('lodash');
 var debugModule = require('debug');
 var debug = debugModule("theme");
-var THEME_PACKAGE_FILENAME = "package.json";
+var THEME_PACKAGE_FILENAME = "bower.json";
+var THEME_ASSETS_DIRNAME = "assets";
 var Theme = (function () {
     function Theme(options) {
+        var _this = this;
         this.options = options;
         this._router = express.Router();
-        this.getThemes(function (err, themes) {
-            debug("themes", themes);
-        });
+        // get infos for theme(s)
         this._router.use(function (req, res, next) {
-            debug('Time:', Date.now());
+            var themesPath = path.join(req.app.get('views'), _this._options.themes);
+            _this.getThemes(themesPath, function (err, themes) {
+                debug("themes", themes);
+            });
+            var themeName = _this._options.theme;
+            var themePath = path.join(req.app.get('views'), _this._options.themes, themeName);
+            var themePackagePath = path.join(themePath, THEME_PACKAGE_FILENAME);
+            var themeAssetsPath = path.join(themePath, THEME_ASSETS_DIRNAME);
+            fs.readJson(themePackagePath, function (err, themePackage) {
+                if (err && err !== null) {
+                    debug(err);
+                    return next(err);
+                }
+                var theme = {
+                    name: themeName,
+                    path: themePath,
+                    packagePath: themePackagePath,
+                    package: themePackage,
+                    assetsPath: themeAssetsPath,
+                };
+                req['theme'] = theme;
+                debug(req['theme']);
+                next();
+            });
+        });
+        // set public path in theme
+        this._router.use(function (req, res, next) {
+            _this._router.use(express.static(req.theme.assetsPath));
             next();
         });
-        this._router.get('/', function (req, res, next) {
-            res.render('index', { title: 'Express' });
+        // render view in theme
+        this._router.use(function (req, res, next) {
+            debug(req.path);
+            var renderFilePath = path.join(req.theme.path, req.path + '.jade');
+            fs.stat(renderFilePath, function (err, stat) {
+                if (err && err !== null) {
+                    debug(err);
+                    return next();
+                }
+                if (stat.isFile()) {
+                    return res.render(renderFilePath, { title: 'Express' });
+                }
+                next();
+            });
         });
-        /* GET users listing. */
-        this._router.get('/users', function (req, res, next) {
-            res.send('respond with a resource');
+        this._router.get('/', function (req, res, next) {
+            res.render(path.join(req['theme'].path, 'index'), { title: 'Express' });
         });
     }
     Object.defineProperty(Theme.prototype, "options", {
         set: function (options) {
             this._options = options;
-            this._options.themesPath = path.join(this._options.views, this._options.themes);
-            this._options.themePath = path.join(this._options.themesPath, this._options.theme);
-            this._options.themePackagePath = path.join(this._options.themePath, THEME_PACKAGE_FILENAME);
         },
         enumerable: true,
         configurable: true
@@ -46,16 +81,16 @@ var Theme = (function () {
     /**
      * Get all valid themes from theme path
      */
-    Theme.prototype.getThemes = function (callback) {
+    Theme.prototype.getThemes = function (themesPath, callback) {
         var _this = this;
-        this.getDirs(this._options.themesPath, function (error, dirs) {
+        this.getDirs(themesPath, function (error, dirs) {
             if (error) {
                 debug("error", error);
                 return callback(error);
             }
             debug("getThemes dirs", dirs);
             async.filter(dirs, function (dir, callback) {
-                _this.getThemePackage(path.join(_this._options.themesPath, dir), function (err, packageObj) {
+                _this.getThemePackage(path.join(themesPath, dir), function (err, packageObj) {
                     if (err && err !== null) {
                         debug("error", err);
                         return callback(false);

@@ -1,18 +1,6 @@
 import * as express from 'express';
 export interface ThemeOptions {
     /**
-     * path of view files to render
-     */
-    views: string;
-    /**
-     * view engine, e.g. jade
-     */
-    viewEngine: string;
-    /**
-     * environment, development or production
-     */
-    env: string;
-    /**
      * themes folder name
      */
     themes: string;
@@ -20,18 +8,6 @@ export interface ThemeOptions {
      * current theme name
      */
     theme: string;
-    /**
-     * path of themes
-     */
-    themesPath?: string;
-    /**
-     * path of current theme
-     */
-    themePath?: string;
-    /**
-     * path of package file of current theme
-     */
-    themePackagePath?: string;
 }
 export declare class Theme {
     private _router;
@@ -42,7 +18,7 @@ export declare class Theme {
     /**
      * Get all valid themes from theme path
      */
-    private getThemes(callback);
+    private getThemes(themesPath, callback);
     /**
      * Get theme packageObj of theme dir
      */

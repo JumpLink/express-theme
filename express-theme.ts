@@ -6,21 +6,10 @@ import * as _ from 'lodash';
 import * as debugModule from 'debug';
 var debug = debugModule("theme");
 
-const THEME_PACKAGE_FILENAME = "package.json";
+const THEME_PACKAGE_FILENAME = "bower.json";
+const THEME_ASSETS_DIRNAME = "assets";
 
 export interface ThemeOptions {
-	/**
-	 * path of view files to render
-	 */
-	views: string;
-	/**
-	 * view engine, e.g. jade
-	 */
-	viewEngine: string;
-	/**
-	 * environment, development or production
-	 */
-	env: string;
 	/**
 	 * themes folder name
 	 */
@@ -29,30 +18,26 @@ export interface ThemeOptions {
 	 * current theme name
 	 */
 	theme: string;
-	/**
-	 * path of themes
-	 */
-	themesPath?: string;
-	/**
-	 * path of current theme
-	 */
-	themePath?: string;
-	/**
-	 * path of package file of current theme 
-	 */
-	themePackagePath?: string;
 }
 
-interface themePackage {
+interface ThemePackage {
 	name: string;
 	description?: string;
 	version: string;
 }
 
-interface themePackageCallback {
+interface ThemeRequestObject {
+	name: string;
+	path: string;
+	packagePath: string;
+	package: ThemePackage;
+	assetsPath: string;
+}
+
+interface ThemePackageCallback {
 	(
 		error?: Error,
-		packageObj?: themePackage
+		packageObj?: ThemePackage
 	): any
 }
 
@@ -70,15 +55,16 @@ interface booleanCallback {
 	): any
 }
 
+interface Requeset extends express.Request {
+	theme: ThemeRequestObject
+}
+
 export class Theme {
 	private _router: express.Router;
 	private _options: ThemeOptions;
 
 	set options(options: ThemeOptions) {
 		this._options = options;
-		this._options.themesPath = path.join(this._options.views, this._options.themes);
-		this._options.themePath = path.join(this._options.themesPath, this._options.theme);
-		this._options.themePackagePath = path.join(this._options.themePath, THEME_PACKAGE_FILENAME);
 	}
 
 	get router(): express.Router {
@@ -90,30 +76,75 @@ export class Theme {
 
 		this._router = express.Router();
 
-		this.getThemes((err, themes) => {
-			debug("themes", themes);
+		// get infos for theme(s)
+		this._router.use((req, res, next) => {
+
+			var themesPath = path.join(req.app.get('views'), this._options.themes);
+
+			this.getThemes(themesPath, (err, themes) => {
+				debug("themes", themes);
+			});
+
+			var themeName = this._options.theme;
+			var themePath = path.join(req.app.get('views'), this._options.themes, themeName);
+			var themePackagePath = path.join(themePath, THEME_PACKAGE_FILENAME);
+			var themeAssetsPath = path.join(themePath, THEME_ASSETS_DIRNAME)
+
+			fs.readJson(themePackagePath, (err: Error, themePackage: ThemePackage) => {
+				if(err && err !== null) {
+					debug(err);
+					return next(err);
+				}
+				var theme:ThemeRequestObject = {
+					name: themeName,
+					path: themePath,
+					packagePath: themePackagePath,
+					package: themePackage,
+					assetsPath: themeAssetsPath,
+				};
+				req['theme'] = theme;
+				debug(req['theme']);
+				next();
+			});
 		});
 
-		this._router.use((req, res, next) => {
-			debug('Time:', Date.now());
+		// set public path in theme
+		this._router.use((req: Requeset, res, next) => {
+			this._router.use(express.static(req.theme.assetsPath));
 			next();
 		});
 
-		this._router.get('/', (req, res, next) => {
-			res.render('index', { title: 'Express' });
+		
+
+		// render view in theme
+		this._router.use((req: Requeset, res, next) => {
+
+			debug(req.path);
+			var renderFilePath = path.join(req.theme.path, req.path + '.jade');
+
+			fs.stat(renderFilePath, (err, stat) => {
+				if (err && err !== null) {
+					debug(err);
+					return next();
+				}
+				if (stat.isFile()) {
+					return res.render(renderFilePath, { title: 'Express' });
+				}
+				next();
+			});
+
 		});
 
-		/* GET users listing. */
-		this._router.get('/users', (req, res, next) => {
-			res.send('respond with a resource');
+		this._router.get('/', (req, res, next) => {
+			res.render(path.join(req['theme'].path, 'index'), { title: 'Express' });
 		});
 	}
 
 	/**
 	 * Get all valid themes from theme path
 	 */
-	private getThemes(callback: getDirsCallback) {
-		this.getDirs(this._options.themesPath, (error, dirs) => {
+	private getThemes(themesPath: string, callback: getDirsCallback) {
+		this.getDirs(themesPath, (error, dirs) => {
 			if (error) {
 				debug("error", error);
 				return callback(error);
@@ -121,7 +152,7 @@ export class Theme {
 			debug("getThemes dirs", dirs);
 
 			async.filter(dirs, (dir, callback) => {
-				this.getThemePackage(path.join(this._options.themesPath, dir), (err, packageObj) => {
+				this.getThemePackage(path.join(themesPath, dir), (err, packageObj) => {
 					if (err && err !== null) {
 						debug("error", err);
 						return callback(false);
@@ -137,7 +168,7 @@ export class Theme {
 	/**
 	 * Get theme packageObj of theme dir
 	 */
-	private getThemePackage(dir: string, callback: themePackageCallback) {
+	private getThemePackage(dir: string, callback: ThemePackageCallback) {
 		var packagePath = path.join(dir, THEME_PACKAGE_FILENAME);
 		fs.stat(packagePath, (err, stat) => {
 			if (err && err !== null) {
@@ -149,8 +180,7 @@ export class Theme {
 				return callback(new Error(packagePath + " is not a file!"));
 			}
 
-
-			fs.readJson(packagePath, (err: Error, packageObj: themePackage) => {
+			fs.readJson(packagePath, (err: Error, packageObj: ThemePackage) => {
 				if (err && err !== null) {
 					debug("error", err);
 					return callback(err);
