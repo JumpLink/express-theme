@@ -3,11 +3,12 @@ import * as fs from 'fs-extra';
 import * as async from 'async';
 import * as path from 'path';
 import * as _ from 'lodash';
+import sass = require('node-sass');
 import * as debugModule from 'debug';
 var debug = debugModule("theme");
 
 const THEME_PACKAGE_FILENAME = "bower.json";
-const THEME_ASSETS_DIRNAME = "assets";
+const THEME_PUBLIC_DIRNAME = "public";
 
 export interface ThemeOptions {
 	/**
@@ -88,7 +89,7 @@ export class Theme {
 			var themeName = this._options.theme;
 			var themePath = path.join(req.app.get('views'), this._options.themes, themeName);
 			var themePackagePath = path.join(themePath, THEME_PACKAGE_FILENAME);
-			var themeAssetsPath = path.join(themePath, THEME_ASSETS_DIRNAME)
+			var themeAssetsPath = path.join(themePath, THEME_PUBLIC_DIRNAME)
 
 			fs.readJson(themePackagePath, (err: Error, themePackage: ThemePackage) => {
 				if(err && err !== null) {
@@ -110,11 +111,36 @@ export class Theme {
 
 		// set public path in theme
 		this._router.use((req: Requeset, res, next) => {
-			this._router.use(express.static(req.theme.assetsPath));
-			next();
+			express.static(req.theme.assetsPath)(req, res, next);
 		});
 
-		
+		// render sass file
+		this._router.use((req: Requeset, res, next) => {
+
+			var basename = path.basename(req.path);
+			if (basename !== '.scss') {
+				return next();
+			}
+			debug("sass", req.path);
+			var renderFilePath = path.join(req.theme.path, req.path + '.jade');
+			fs.stat(renderFilePath, (err, stat) => {
+				if (err && err !== null) {
+					debug(err);
+					return next();
+				}
+				if (stat.isFile()) {
+					sass.render({
+						file: renderFilePath,
+					}, (err, result) => {
+						debug("send " + req.path);
+						return res.send(result);
+					});
+				}
+				next();
+			});
+
+		});
+
 
 		// render view in theme
 		this._router.use((req: Requeset, res, next) => {
@@ -128,13 +154,14 @@ export class Theme {
 					return next();
 				}
 				if (stat.isFile()) {
+					debug("render " + req.path);
 					return res.render(renderFilePath, { title: 'Express' });
 				}
 				next();
 			});
-
 		});
 
+		// use index.jade for /
 		this._router.get('/', (req, res, next) => {
 			res.render(path.join(req['theme'].path, 'index'), { title: 'Express' });
 		});

@@ -2,9 +2,14 @@
   "name": "express-theme",
   "version": "0.0.0",
   "description": "express.js middleware that aim to create structured and simple theme",
-  "main": "express-theme.js",
+  "main": "./express-theme.js",
+  "typescript": {
+    "definition": "./express-theme.d.ts",
+    "main": "./express-theme.ts"
+  },
   "scripts": {
     "build": "./node_modules/.bin/tsc",
+    "watch": "./node_modules/.bin/tsc -w",
     "install": "./node_modules/.bin/typings install"
   },
   "repository": {
@@ -24,7 +29,8 @@
     "jade": "~1.11.0",
     "lodash": "^4.1.0",
     "morgan": "~1.6.1",
-    "node-sass-middleware": "0.8.0",
+    "node-sass": "^3.4.2",
+    "node-sass-middleware": "0.9.7",
     "typescript": "^1.7.5",
     "typings": "^0.6.3"
   }

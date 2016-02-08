@@ -4,10 +4,11 @@ var fs = require('fs-extra');
 var async = require('async');
 var path = require('path');
 var _ = require('lodash');
+var sass = require('node-sass');
 var debugModule = require('debug');
 var debug = debugModule("theme");
 var THEME_PACKAGE_FILENAME = "bower.json";
-var THEME_ASSETS_DIRNAME = "assets";
+var THEME_PUBLIC_DIRNAME = "public";
 var Theme = (function () {
     function Theme(options) {
         var _this = this;
@@ -22,7 +23,7 @@ var Theme = (function () {
             var themeName = _this._options.theme;
             var themePath = path.join(req.app.get('views'), _this._options.themes, themeName);
             var themePackagePath = path.join(themePath, THEME_PACKAGE_FILENAME);
-            var themeAssetsPath = path.join(themePath, THEME_ASSETS_DIRNAME);
+            var themeAssetsPath = path.join(themePath, THEME_PUBLIC_DIRNAME);
             fs.readJson(themePackagePath, function (err, themePackage) {
                 if (err && err !== null) {
                     debug(err);
@@ -42,8 +43,31 @@ var Theme = (function () {
         });
         // set public path in theme
         this._router.use(function (req, res, next) {
-            _this._router.use(express.static(req.theme.assetsPath));
-            next();
+            express.static(req.theme.assetsPath)(req, res, next);
+        });
+        // render sass file
+        this._router.use(function (req, res, next) {
+            var basename = path.basename(req.path);
+            if (basename !== '.scss') {
+                return next();
+            }
+            debug("sass", req.path);
+            var renderFilePath = path.join(req.theme.path, req.path + '.jade');
+            fs.stat(renderFilePath, function (err, stat) {
+                if (err && err !== null) {
+                    debug(err);
+                    return next();
+                }
+                if (stat.isFile()) {
+                    sass.render({
+                        file: renderFilePath,
+                    }, function (err, result) {
+                        debug("send " + req.path);
+                        return res.send(result);
+                    });
+                }
+                next();
+            });
         });
         // render view in theme
         this._router.use(function (req, res, next) {
@@ -55,11 +79,13 @@ var Theme = (function () {
                     return next();
                 }
                 if (stat.isFile()) {
+                    debug("render " + req.path);
                     return res.render(renderFilePath, { title: 'Express' });
                 }
                 next();
             });
         });
+        // use index.jade for /
         this._router.get('/', function (req, res, next) {
             res.render(path.join(req['theme'].path, 'index'), { title: 'Express' });
         });
