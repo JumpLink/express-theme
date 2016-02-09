@@ -18,6 +18,10 @@ export declare class Theme {
     /**
      * Get all valid themes from theme path
      */
+    private fileExists(filePath, callback);
+    /**
+     * Get all valid themes from theme path
+     */
     private getThemes(themesPath, callback);
     /**
      * Get theme packageObj of theme dir

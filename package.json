@@ -28,10 +28,13 @@
     "fs-extra": "^0.26.5",
     "jade": "~1.11.0",
     "lodash": "^4.1.0",
+    "memory-fs": "^0.3.0",
     "morgan": "~1.6.1",
     "node-sass": "^3.4.2",
     "node-sass-middleware": "0.9.7",
     "typescript": "^1.7.5",
-    "typings": "^0.6.3"
+    "typings": "^0.6.3",
+    "webpack": "^1.12.13",
+    "webpack-dev-middleware": "^1.5.1"
   }
 }

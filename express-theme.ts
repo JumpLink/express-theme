@@ -5,7 +5,13 @@ import * as path from 'path';
 import * as _ from 'lodash';
 import sass = require('node-sass');
 import * as debugModule from 'debug';
-var debug = debugModule("theme");
+import * as webpack from 'webpack';
+
+var MemoryFileSystem = require("memory-fs"); // https://webpack.github.io/docs/node.js-api.html
+
+var debug = debugModule('theme:debug');
+var debugScripts = debugModule('theme:scripts');
+var debugStyles = debugModule('theme:styles');
 
 const THEME_PACKAGE_FILENAME = "bower.json";
 const THEME_PUBLIC_DIRNAME = "public";
@@ -32,7 +38,7 @@ interface ThemeRequestObject {
 	path: string;
 	packagePath: string;
 	package: ThemePackage;
-	assetsPath: string;
+	publicPath: string;
 }
 
 interface ThemePackageCallback {
@@ -89,7 +95,7 @@ export class Theme {
 			var themeName = this._options.theme;
 			var themePath = path.join(req.app.get('views'), this._options.themes, themeName);
 			var themePackagePath = path.join(themePath, THEME_PACKAGE_FILENAME);
-			var themeAssetsPath = path.join(themePath, THEME_PUBLIC_DIRNAME)
+			var themePublicPath = path.join(themePath, THEME_PUBLIC_DIRNAME)
 
 			fs.readJson(themePackagePath, (err: Error, themePackage: ThemePackage) => {
 				if(err && err !== null) {
@@ -101,7 +107,7 @@ export class Theme {
 					path: themePath,
 					packagePath: themePackagePath,
 					package: themePackage,
-					assetsPath: themeAssetsPath,
+					publicPath: themePublicPath,
 				};
 				req['theme'] = theme;
 				debug(req['theme']);
@@ -109,61 +115,121 @@ export class Theme {
 			});
 		});
 
-		// set public path in theme
+		/**
+		 * build app.scss file with sass
+		 * TODO error handling
+		 * TODO locals: http://stackoverflow.com/a/31656540
+		 * TODO cache result
+		 * TODO move this tu custom class?
+		 */
 		this._router.use((req: Requeset, res, next) => {
-			express.static(req.theme.assetsPath)(req, res, next);
-		});
-
-		// render sass file
-		this._router.use((req: Requeset, res, next) => {
-
-			var basename = path.basename(req.path);
-			if (basename !== '.scss') {
+			if (req.path !== '/app.scss') {
 				return next();
 			}
-			debug("sass", req.path);
-			var renderFilePath = path.join(req.theme.path, req.path + '.jade');
-			fs.stat(renderFilePath, (err, stat) => {
-				if (err && err !== null) {
-					debug(err);
-					return next();
-				}
-				if (stat.isFile()) {
-					sass.render({
-						file: renderFilePath,
-					}, (err, result) => {
-						debug("send " + req.path);
-						return res.send(result);
-					});
-				}
-				next();
-			});
+			debugStyles(req.path);
+			var renderFilePath = path.join(req.theme.publicPath, req.path);
 
+			this.fileExists(renderFilePath, (err, exists) => {
+				if (exists !== true || (err && err !== null)) { return next(); }
+				sass.render({
+					file: renderFilePath,
+				}, (err, result) => {
+					if(err && err !== null) { return next(err); }
+					debugStyles("send " + req.path);
+					res.set('Content-Type', 'text/css');
+					res.set('Cache-Control', 'max-age=0');
+					return res.send(result.css);
+				});
+			});
 		});
 
+		/**
+		 * build app.js file with webpack
+		 * TODO error handling
+		 * TODO locals
+		 * TODO cache result
+		 * TODO check if browserify is better for this job: https://github.com/substack/node-browserify#api-example
+		 * TODO move this tu custom class?
+		 */
+		this._router.use((req: Requeset, res, next) => {
+
+			var locals = {
+				test: 'test'
+			};
+
+			if (req.path !== '/app.js') { return next(); }
+			var renderFilePath = path.join(req.theme.publicPath, req.path);
+			debugScripts(req.path, renderFilePath);
+			this.fileExists(renderFilePath, (err, exists) => {
+				if (exists !== true || (err && err !== null)) { return next(); }
+				// TODO error handling: https://webpack.github.io/docs/node.js-api.html
+				var webpackCompiler = webpack({
+					entry: renderFilePath,
+					output: {
+						path: '/',
+						filename: "app.js"
+					},
+					plugins: [
+						// define locals here
+						new webpack.DefinePlugin({
+							LOCALS: JSON.stringify(locals)
+						})
+					],
+					module: {
+						loaders: [
+
+						]
+					}
+				});
+				var mfs = webpackCompiler.outputFileSystem = new MemoryFileSystem();
+				webpackCompiler.run(function(err, stats) {
+					if(err && err !== null) { return next(err); }
+					var fileContent = mfs.readFile("/app.js", (err: Error, fileContent) => {
+						if(err && err !== null) { return next(err); }
+						res.set('Content-Type', 'application/javascript');
+						return res.send(fileContent);
+					});
+				});
+			});
+		});
 
 		// render view in theme
 		this._router.use((req: Requeset, res, next) => {
 
-			debug(req.path);
+			debug("view", req.path);
 			var renderFilePath = path.join(req.theme.path, req.path + '.jade');
-
-			fs.stat(renderFilePath, (err, stat) => {
-				if (err && err !== null) {
-					debug(err);
+			this.fileExists(renderFilePath, (err, exists) => {
+				if (exists !== true || (err && err !== null)) {
 					return next();
 				}
-				if (stat.isFile()) {
-					debug("render " + req.path);
-					return res.render(renderFilePath, { title: 'Express' });
-				}
-				next();
+				return res.render(renderFilePath, { title: 'Express' });
 			});
 		});
 
 		// use index.jade for /
 		this._router.get('/', (req, res, next) => {
 			res.render(path.join(req['theme'].path, 'index'), { title: 'Express' });
+		});
+
+		// set public path in theme
+		this._router.use((req: Requeset, res, next) => {
+			express.static(req.theme.publicPath)(req, res, next);
+		});
+	}
+
+	/**
+	 * Get all valid themes from theme path
+	 */
+	private fileExists(filePath: string, callback: booleanCallback) {
+		fs.stat(filePath, (err, stat) => {
+			if (err && err !== null) {
+				debug(err);
+				return callback(err, false);
+			}
+			if (stat.isFile()) {
+				return callback(null, true);
+			}
+			return callback(null, false);
 		});
 	}
 
