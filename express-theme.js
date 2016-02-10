@@ -5,13 +5,15 @@ var path = require('path');
 var _ = require('lodash');
 var sass = require('node-sass');
 var debugModule = require('debug');
-var webpack = require('webpack');
-var MemoryFileSystem = require("memory-fs"); // https://webpack.github.io/docs/node.js-api.html
+// import * as webpack from 'webpack';
+var browserify = require('browserify-middleware');
+// var MemoryFileSystem = require("memory-fs"); // https://webpack.github.io/docs/node.js-api.html
 var debug = debugModule('theme:debug');
 var debugScripts = debugModule('theme:scripts');
 var debugStyles = debugModule('theme:styles');
 var THEME_PACKAGE_FILENAME = "bower.json";
 var THEME_PUBLIC_DIRNAME = "public";
+var THEME_VIEWS_DIRNAME = "views";
 var Theme = (function () {
     function Theme(options) {
         var _this = this;
@@ -41,7 +43,7 @@ var Theme = (function () {
                 };
                 req['theme'] = theme;
                 debug(req['theme']);
-                next();
+                return next();
             });
         });
         /**
@@ -51,11 +53,7 @@ var Theme = (function () {
          * TODO cache result
          * TODO move this tu custom class?
          */
-        this._router.use(function (req, res, next) {
-            if (req.path !== '/app.scss') {
-                return next();
-            }
-            debugStyles(req.path);
+        this._router.get('/styles/app.scss', function (req, res, next) {
             var renderFilePath = path.join(req.theme.publicPath, req.path);
             _this.fileExists(renderFilePath, function (err, exists) {
                 if (exists !== true || (err && err !== null)) {
@@ -75,62 +73,31 @@ var Theme = (function () {
             });
         });
         /**
-         * build app.js file with webpack
+         * build app.js file with browserify
          * TODO error handling
          * TODO locals
          * TODO cache result
-         * TODO check if browserify is better for this job: https://github.com/substack/node-browserify#api-example
          * TODO move this tu custom class?
+         * @see https://github.com/ForbesLindesay/browserify-middleware
          */
-        this._router.use(function (req, res, next) {
+        this._router.get('/scripts/app.js', function (req, res, next) {
             var locals = {
                 test: 'test'
             };
-            if (req.path !== '/app.js') {
-                return next();
-            }
-            var renderFilePath = path.join(req.theme.publicPath, req.path);
-            debugScripts(req.path, renderFilePath);
-            _this.fileExists(renderFilePath, function (err, exists) {
-                if (exists !== true || (err && err !== null)) {
-                    return next();
+            var options = {
+                insertGlobals: true,
+                vars: {
+                    test: 'foobar',
                 }
-                // TODO error handling: https://webpack.github.io/docs/node.js-api.html
-                var webpackCompiler = webpack({
-                    entry: renderFilePath,
-                    output: {
-                        path: '/',
-                        filename: "app.js"
-                    },
-                    plugins: [
-                        // define locals here
-                        new webpack.DefinePlugin({
-                            LOCALS: JSON.stringify(locals)
-                        })
-                    ],
-                    module: {
-                        loaders: []
-                    }
-                });
-                var mfs = webpackCompiler.outputFileSystem = new MemoryFileSystem();
-                webpackCompiler.run(function (err, stats) {
-                    if (err && err !== null) {
-                        return next(err);
-                    }
-                    var fileContent = mfs.readFile("/app.js", function (err, fileContent) {
-                        if (err && err !== null) {
-                            return next(err);
-                        }
-                        res.set('Content-Type', 'application/javascript');
-                        return res.send(fileContent);
-                    });
-                });
-            });
+            };
+            var renderFilePath = path.join(req.theme.publicPath, req.path);
+            debugScripts(renderFilePath);
+            browserify(renderFilePath, options)(req, res, next);
         });
         // render view in theme
         this._router.use(function (req, res, next) {
             debug("view", req.path);
-            var renderFilePath = path.join(req.theme.path, req.path + '.jade');
+            var renderFilePath = path.join(req.theme.path, THEME_VIEWS_DIRNAME, req.path + '.jade');
             _this.fileExists(renderFilePath, function (err, exists) {
                 if (exists !== true || (err && err !== null)) {
                     return next();
@@ -140,11 +107,11 @@ var Theme = (function () {
         });
         // use index.jade for /
         this._router.get('/', function (req, res, next) {
-            res.render(path.join(req['theme'].path, 'index'), { title: 'Express' });
+            return res.render(path.join(req['theme'].path, 'views', 'index'), { title: 'Express' });
         });
         // set public path in theme
         this._router.use(function (req, res, next) {
-            express.static(req.theme.publicPath)(req, res, next);
+            return express.static(req.theme.publicPath)(req, res, next);
         });
     }
     Object.defineProperty(Theme.prototype, "options", {
@@ -196,7 +163,7 @@ var Theme = (function () {
                     return callback(true);
                 });
             }, function (results) {
-                callback(null, results);
+                return callback(null, results);
             });
         });
     };
@@ -221,7 +188,7 @@ var Theme = (function () {
                 if (!_.isString(packageObj.version) || !_.isString(packageObj.name)) {
                     return callback(new Error("theme package file broken!"));
                 }
-                callback(null, packageObj);
+                return callback(null, packageObj);
             });
         });
     };

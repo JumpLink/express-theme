@@ -3,6 +3,7 @@
   "devDependencies": {},
   "ambientDependencies": {
     "async": "github:DefinitelyTyped/DefinitelyTyped/async/async.d.ts#a940132c9667d664811a8aea16a09618ff3d40fe",
+    "browserify": "github:DefinitelyTyped/DefinitelyTyped/browserify/browserify.d.ts#161d514d1259011b6c194ef4c4b456d64f25a1f1",
     "debug": "github:DefinitelyTyped/DefinitelyTyped/debug/debug.d.ts#5ccca9a4efc3d08724ff14ea3a263c7417db0b3d",
     "express": "github:DefinitelyTyped/DefinitelyTyped/express/express.d.ts#dd4626a4e23ce8d6d175e0fe8244a99771c8c3f2",
     "fs-extra": "github:DefinitelyTyped/DefinitelyTyped/fs-extra/fs-extra.d.ts#a29b4dbbd98e2ff2c31588cfe573d1417bc2b33d",
