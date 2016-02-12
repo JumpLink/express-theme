@@ -10,6 +10,7 @@ const THEMES_DIRNAME = "themes";
 const THEME_PUBLIC_DIRNAME = "public";
 const THEME_VIEWS_DIRNAME = "views";
 const THEME_SCRIPTS_DIRNAME = "scripts";
+const THEME_COPNFIG_DIRNAME = "config";
 const THEME_STYLES_DIRNAME = "styles";
 
 export interface IThemeOptions {
@@ -135,6 +136,38 @@ export class Filesystem {
 			return callback(null, false);
 		});
 	}
+
+	protected getJson(dir, cb) {
+		// this.debug('transform variables.json');
+		this.fileExists(dir, (err, exists) => {
+			if (exists !== true) { return cb(new Error(dir+" Not Found")); }
+			if (err && err !== null) { return cb(err); }
+			fs.readJson(dir, (err, data) => {
+				if (err && err !== null) { return cb(err, {}); }
+				return cb(null, data);
+			});
+		});
+	}
+
+	// TODO get variable overwrites from db 
+	protected getSettings(req: IRequest, cb): any {
+		var settings_data = {};
+		// shopify like settings_schema.json file
+		var settingsSchemaFilePath = path.join(req.theme.path, THEME_COPNFIG_DIRNAME, 'settings_schema.json');
+		this.getJson(settingsSchemaFilePath, (err, schema) => {
+			if (err && err !== null) { this.debug(err); return cb(err); }
+			for (var i in schema) {
+				if(schema[i].settings) {
+					for (var def in schema[i].settings) {
+						if(schema[i].settings[def].id && schema[i].settings[def].default) {
+							settings_data[schema[i].settings[def].id] = schema[i].settings[def].default;
+						}
+					}
+				}
+			}
+			return cb(null, settings_data);
+		});
+	}
 }
 
 export class Styles extends Filesystem implements IAssets {
@@ -155,22 +188,46 @@ export class Styles extends Filesystem implements IAssets {
 	public render(req: IRequest, res, next): any {
 		var renderFilePath = path.join(req.theme.publicPath, req.path);
 		this.fileExists(renderFilePath, (err, exists) => {
-			if (exists !== true || (err && err !== null)) { return next(); }
-			this.sass.render({
-				file: renderFilePath,
-			}, (err, result) => {
-				if(err && err !== null) { return next(err); }
-				this.debug("send " + req.path);
-				res.set('Content-Type', 'text/css');
-				res.set('Cache-Control', 'max-age=0');
-				return res.send(result.css);
+			if (exists !== true || (err && err !== null)) { return next(err); }
+
+			fs.readFile(renderFilePath, 'utf8', (err, scss_string) => {
+				if (err && err !== null) { return next(err); }
+				this.settings(req, (err, scss_vars_string) => {
+					if(err && err !== null) { return next(err); }
+					this.sass.render({
+						data: scss_vars_string+scss_string,
+						includePaths: [
+							path.join(req.theme.publicPath, THEME_STYLES_DIRNAME),
+						],
+					}, (err, result) => {
+						if(err && err !== null) { return next(err); }
+						this.debug("send " + req.path);
+						res.set('Content-Type', 'text/css');
+						res.set('Cache-Control', 'max-age=0');
+						return res.send(result.css);
+					});
+				})
+
 			});
+		});
+	}
+
+	private settings(req: IRequest, cb): any {
+		this.getSettings(req, (err, settings_data) => {
+			var scss_string: string = '';
+			if (err && err !== null) { this.debug(err); return cb(err); }
+			for (var key in settings_data) {
+				scss_string += '$'+key+': '+settings_data[key]+';\n';
+			}
+			this.debug(scss_string);
+			return cb(null, scss_string);
 		});
 	}
 }
 
 export class Scripts extends Filesystem implements IAssets {
 
+	// TODO remove
 	private browserify = require('browserify-middleware');
 	private browserifyTransformTools = require('browserify-transform-tools');
 
@@ -181,7 +238,6 @@ export class Scripts extends Filesystem implements IAssets {
 	/**
 	 * build app.js file with browserify
 	 * TODO error handling
-	 * TODO locals
 	 * TODO cache result
 	 * TODO move this tu custom class?
 	 * @see https://github.com/ForbesLindesay/browserify-middleware
@@ -189,35 +245,17 @@ export class Scripts extends Filesystem implements IAssets {
 	public render(req: IRequest, res, next): any {
 		var renderFilePath = path.join(req.theme.publicPath, req.path);
 		this.debug(renderFilePath);
-		var locals = {
-			test: 'test'
-		};
-
-		var options = {
-			transform: [
-				// inject variables in variables.js
-				this.browserifyTransformTools.makeRequireTransform('requireTransform',
-					{evaluateArguments: true},
-					(args, opts, cb) => {
-						if (args[0] === 'variables.json') {
-							var variableFilePath = path.join(req.theme.publicPath, THEME_SCRIPTS_DIRNAME, 'variables.json');
-							this.debug('transform variables.json');
-							this.fileExists(variableFilePath, (err, exists) => {
-								if (exists !== true || (err && err !== null)) { return cb(); }
-								fs.readJson(variableFilePath, (err, data) => {
-									if (err && err !== null) { return cb(err, JSON.stringify({error:err})); }
-									return cb(null, JSON.stringify(data));
-								});
-							});
-						} else {
-							return cb();
-						}
-					}
-				)
-			]
-		};
+		var options = {};
 		this.browserify(renderFilePath, options)(req, res, next);
 	}
+
+	public settings(req: IRequest, res, next): any {
+		this.getSettings(req, (err, settings_data) => {
+			if (err && err !== null) { this.debug(err); return next(err); }
+			return res.json(settings_data);
+		});
+	}
+
 }
 
 export class Views extends Filesystem implements IAssets {
@@ -272,6 +310,13 @@ export class Theme extends Filesystem {
 		 */
 		this._router.get('/'+THEME_SCRIPTS_DIRNAME+'/app.js', (req: IRequest, res, next) => {
 			return this.scripts.render(req, res, next);
+		});
+
+		/**
+		 * render settings.json file
+		 */
+		this._router.get('/'+THEME_SCRIPTS_DIRNAME+'/settings.json', (req: IRequest, res, next) => {
+			return this.scripts.settings(req, res, next);
 		});
 
 		/**

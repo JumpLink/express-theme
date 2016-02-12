@@ -53,6 +53,8 @@ export declare class Filesystem {
      * Get all valid themes from theme path
      */
     protected fileExists(filePath: string, callback: IBooleanCallback): void;
+    protected getJson(dir: any, cb: any): void;
+    protected getSettings(req: IRequest, cb: any): any;
 }
 export declare class Styles extends Filesystem implements IAssets {
     private sass;
@@ -65,6 +67,7 @@ export declare class Styles extends Filesystem implements IAssets {
      * TODO move this tu custom class?
      */
     render(req: IRequest, res: any, next: any): any;
+    private settings(req, cb);
 }
 export declare class Scripts extends Filesystem implements IAssets {
     private browserify;
@@ -73,12 +76,12 @@ export declare class Scripts extends Filesystem implements IAssets {
     /**
      * build app.js file with browserify
      * TODO error handling
-     * TODO locals
      * TODO cache result
      * TODO move this tu custom class?
      * @see https://github.com/ForbesLindesay/browserify-middleware
      */
     render(req: IRequest, res: any, next: any): any;
+    settings(req: IRequest, res: any, next: any): any;
 }
 export declare class Views extends Filesystem implements IAssets {
     constructor();

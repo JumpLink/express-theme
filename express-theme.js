@@ -1,3 +1,4 @@
+"use strict";
 var __extends = (this && this.__extends) || function (d, b) {
     for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
     function __() { this.constructor = d; }
@@ -14,6 +15,7 @@ var THEMES_DIRNAME = "themes";
 var THEME_PUBLIC_DIRNAME = "public";
 var THEME_VIEWS_DIRNAME = "views";
 var THEME_SCRIPTS_DIRNAME = "scripts";
+var THEME_COPNFIG_DIRNAME = "config";
 var THEME_STYLES_DIRNAME = "styles";
 var Filesystem = (function () {
     function Filesystem(debugname) {
@@ -74,8 +76,48 @@ var Filesystem = (function () {
             return callback(null, false);
         });
     };
+    Filesystem.prototype.getJson = function (dir, cb) {
+        // this.debug('transform variables.json');
+        this.fileExists(dir, function (err, exists) {
+            if (exists !== true) {
+                return cb(new Error(dir + " Not Found"));
+            }
+            if (err && err !== null) {
+                return cb(err);
+            }
+            fs.readJson(dir, function (err, data) {
+                if (err && err !== null) {
+                    return cb(err, {});
+                }
+                return cb(null, data);
+            });
+        });
+    };
+    // TODO get variable overwrites from db 
+    Filesystem.prototype.getSettings = function (req, cb) {
+        var _this = this;
+        var settings_data = {};
+        // shopify like settings_schema.json file
+        var settingsSchemaFilePath = path.join(req.theme.path, THEME_COPNFIG_DIRNAME, 'settings_schema.json');
+        this.getJson(settingsSchemaFilePath, function (err, schema) {
+            if (err && err !== null) {
+                _this.debug(err);
+                return cb(err);
+            }
+            for (var i in schema) {
+                if (schema[i].settings) {
+                    for (var def in schema[i].settings) {
+                        if (schema[i].settings[def].id && schema[i].settings[def].default) {
+                            settings_data[schema[i].settings[def].id] = schema[i].settings[def].default;
+                        }
+                    }
+                }
+            }
+            return cb(null, settings_data);
+        });
+    };
     return Filesystem;
-})();
+}());
 exports.Filesystem = Filesystem;
 var Styles = (function (_super) {
     __extends(Styles, _super);
@@ -95,75 +137,85 @@ var Styles = (function (_super) {
         var renderFilePath = path.join(req.theme.publicPath, req.path);
         this.fileExists(renderFilePath, function (err, exists) {
             if (exists !== true || (err && err !== null)) {
-                return next();
+                return next(err);
             }
-            _this.sass.render({
-                file: renderFilePath,
-            }, function (err, result) {
+            fs.readFile(renderFilePath, 'utf8', function (err, scss_string) {
                 if (err && err !== null) {
                     return next(err);
                 }
-                _this.debug("send " + req.path);
-                res.set('Content-Type', 'text/css');
-                res.set('Cache-Control', 'max-age=0');
-                return res.send(result.css);
+                _this.settings(req, function (err, scss_vars_string) {
+                    if (err && err !== null) {
+                        return next(err);
+                    }
+                    _this.sass.render({
+                        data: scss_vars_string + scss_string,
+                        includePaths: [
+                            path.join(req.theme.publicPath, THEME_STYLES_DIRNAME),
+                        ],
+                    }, function (err, result) {
+                        if (err && err !== null) {
+                            return next(err);
+                        }
+                        _this.debug("send " + req.path);
+                        res.set('Content-Type', 'text/css');
+                        res.set('Cache-Control', 'max-age=0');
+                        return res.send(result.css);
+                    });
+                });
             });
         });
     };
+    Styles.prototype.settings = function (req, cb) {
+        var _this = this;
+        this.getSettings(req, function (err, settings_data) {
+            var scss_string = '';
+            if (err && err !== null) {
+                _this.debug(err);
+                return cb(err);
+            }
+            for (var key in settings_data) {
+                scss_string += '$' + key + ': ' + settings_data[key] + ';\n';
+            }
+            _this.debug(scss_string);
+            return cb(null, scss_string);
+        });
+    };
     return Styles;
-})(Filesystem);
+}(Filesystem));
 exports.Styles = Styles;
 var Scripts = (function (_super) {
     __extends(Scripts, _super);
     function Scripts() {
         _super.call(this, 'theme:scripts');
+        // TODO remove
         this.browserify = require('browserify-middleware');
         this.browserifyTransformTools = require('browserify-transform-tools');
     }
     /**
      * build app.js file with browserify
      * TODO error handling
-     * TODO locals
      * TODO cache result
      * TODO move this tu custom class?
      * @see https://github.com/ForbesLindesay/browserify-middleware
      */
     Scripts.prototype.render = function (req, res, next) {
-        var _this = this;
         var renderFilePath = path.join(req.theme.publicPath, req.path);
         this.debug(renderFilePath);
-        var locals = {
-            test: 'test'
-        };
-        var options = {
-            transform: [
-                // inject variables in variables.js
-                this.browserifyTransformTools.makeRequireTransform('requireTransform', { evaluateArguments: true }, function (args, opts, cb) {
-                    if (args[0] === 'variables.json') {
-                        var variableFilePath = path.join(req.theme.publicPath, THEME_SCRIPTS_DIRNAME, 'variables.json');
-                        _this.debug('transform variables.json');
-                        _this.fileExists(variableFilePath, function (err, exists) {
-                            if (exists !== true || (err && err !== null)) {
-                                return cb();
-                            }
-                            fs.readJson(variableFilePath, function (err, data) {
-                                if (err && err !== null) {
-                                    return cb(err, JSON.stringify({ error: err }));
-                                }
-                                return cb(null, JSON.stringify(data));
-                            });
-                        });
-                    }
-                    else {
-                        return cb();
-                    }
-                })
-            ]
-        };
+        var options = {};
         this.browserify(renderFilePath, options)(req, res, next);
     };
+    Scripts.prototype.settings = function (req, res, next) {
+        var _this = this;
+        this.getSettings(req, function (err, settings_data) {
+            if (err && err !== null) {
+                _this.debug(err);
+                return next(err);
+            }
+            return res.json(settings_data);
+        });
+    };
     return Scripts;
-})(Filesystem);
+}(Filesystem));
 exports.Scripts = Scripts;
 var Views = (function (_super) {
     __extends(Views, _super);
@@ -182,7 +234,7 @@ var Views = (function (_super) {
     };
     ;
     return Views;
-})(Filesystem);
+}(Filesystem));
 exports.Views = Views;
 var Theme = (function (_super) {
     __extends(Theme, _super);
@@ -209,6 +261,12 @@ var Theme = (function (_super) {
          */
         this._router.get('/' + THEME_SCRIPTS_DIRNAME + '/app.js', function (req, res, next) {
             return _this.scripts.render(req, res, next);
+        });
+        /**
+         * render settings.json file
+         */
+        this._router.get('/' + THEME_SCRIPTS_DIRNAME + '/settings.json', function (req, res, next) {
+            return _this.scripts.settings(req, res, next);
         });
         /**
          * render view file
@@ -324,5 +382,5 @@ var Theme = (function (_super) {
         });
     };
     return Theme;
-})(Filesystem);
+}(Filesystem));
 exports.Theme = Theme;
