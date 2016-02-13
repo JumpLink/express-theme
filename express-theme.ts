@@ -7,7 +7,7 @@ import * as debugModule from 'debug';
 
 const THEME_PACKAGE_FILENAME = "bower.json";
 const THEMES_DIRNAME = "themes";
-const THEME_PUBLIC_DIRNAME = "public";
+const THEME_PUBLIC_DIRNAME = "assets";
 const THEME_VIEWS_DIRNAME = "views";
 const THEME_SCRIPTS_DIRNAME = "scripts";
 const THEME_COPNFIG_DIRNAME = "config";
@@ -29,7 +29,7 @@ export interface IThemePackage {
 export interface IThemeRequestObject {
 	name: string;
 	path: string;
-	packagePath: string;
+	settings: Object;
 	package: IThemePackage;
 	publicPath: string;
 }
@@ -137,7 +137,7 @@ export class Filesystem {
 		});
 	}
 
-	protected getJson(dir, cb) {
+	protected readJson(dir, cb) {
 		// this.debug('transform variables.json');
 		this.fileExists(dir, (err, exists) => {
 			if (exists !== true) { return cb(new Error(dir+" Not Found")); }
@@ -146,26 +146,6 @@ export class Filesystem {
 				if (err && err !== null) { return cb(err, {}); }
 				return cb(null, data);
 			});
-		});
-	}
-
-	// TODO get variable overwrites from db 
-	protected getSettings(req: IRequest, cb): any {
-		var settings_data = {};
-		// shopify like settings_schema.json file
-		var settingsSchemaFilePath = path.join(req.theme.path, THEME_COPNFIG_DIRNAME, 'settings_schema.json');
-		this.getJson(settingsSchemaFilePath, (err, schema) => {
-			if (err && err !== null) { this.debug(err); return cb(err); }
-			for (var i in schema) {
-				if(schema[i].settings) {
-					for (var def in schema[i].settings) {
-						if(schema[i].settings[def].id && schema[i].settings[def].default) {
-							settings_data[schema[i].settings[def].id] = schema[i].settings[def].default;
-						}
-					}
-				}
-			}
-			return cb(null, settings_data);
 		});
 	}
 }
@@ -186,7 +166,7 @@ export class Styles extends Filesystem implements IAssets {
 	 * TODO move this tu custom class?
 	 */
 	public render(req: IRequest, res, next): any {
-		var renderFilePath = path.join(req.theme.publicPath, req.path);
+		var renderFilePath = path.join(req.theme.path, req.path);
 		this.fileExists(renderFilePath, (err, exists) => {
 			if (exists !== true || (err && err !== null)) { return next(err); }
 
@@ -213,23 +193,18 @@ export class Styles extends Filesystem implements IAssets {
 	}
 
 	private settings(req: IRequest, cb): any {
-		this.getSettings(req, (err, settings_data) => {
-			var scss_string: string = '';
-			if (err && err !== null) { this.debug(err); return cb(err); }
-			for (var key in settings_data) {
-				scss_string += '$'+key+': '+settings_data[key]+';\n';
-			}
-			this.debug(scss_string);
-			return cb(null, scss_string);
-		});
+		var scss_string: string = '';
+		for (var key in req.theme.settings) {
+			scss_string += '$'+key+': '+req.theme.settings[key]+';\n';
+		}
+		this.debug(scss_string);
+		return cb(null, scss_string);
 	}
 }
 
 export class Scripts extends Filesystem implements IAssets {
 
-	// TODO remove
 	private browserify = require('browserify-middleware');
-	private browserifyTransformTools = require('browserify-transform-tools');
 
 	constructor() {
 		super('theme:scripts');
@@ -243,17 +218,15 @@ export class Scripts extends Filesystem implements IAssets {
 	 * @see https://github.com/ForbesLindesay/browserify-middleware
 	 */
 	public render(req: IRequest, res, next): any {
-		var renderFilePath = path.join(req.theme.publicPath, req.path);
+		this.debug(req.path);
+		var renderFilePath = path.join(req.theme.path, req.path);
 		this.debug(renderFilePath);
 		var options = {};
 		this.browserify(renderFilePath, options)(req, res, next);
 	}
 
 	public settings(req: IRequest, res, next): any {
-		this.getSettings(req, (err, settings_data) => {
-			if (err && err !== null) { this.debug(err); return next(err); }
-			return res.json(settings_data);
-		});
+		return res.json(req.theme.settings);
 	}
 
 }
@@ -265,7 +238,7 @@ export class Views extends Filesystem implements IAssets {
 	}
 
 	public render(req: IRequest, res, next) {
-		this.debug("view", req.path);
+		this.debug(req.path);
 		var renderFilePath = path.join(req.theme.path, THEME_VIEWS_DIRNAME, req.path + '.jade');
 		this.fileExists(renderFilePath, (err, exists) => {
 			if (exists !== true || (err && err !== null)) { return next(); }
@@ -280,6 +253,7 @@ export class Theme extends Filesystem {
 	private scripts: Scripts = new Scripts();
 	private views: Views = new Views();
 	private styles: Styles = new Styles();
+	private strformat = require('strformat');
 
 	set options(options: IThemeOptions) {
 		this._options = options;
@@ -301,22 +275,29 @@ export class Theme extends Filesystem {
 		/**
 		 * render style file
 		 */
-		this._router.get('/'+THEME_STYLES_DIRNAME+'/app.scss', (req: IRequest, res, next) => {
+		this._router.get('/'+THEME_PUBLIC_DIRNAME+'/'+THEME_STYLES_DIRNAME+'/app.scss', (req: IRequest, res, next) => {
 			return this.styles.render(req, res, next);
 		});
 
 		/**
 		 * render script file
 		 */
-		this._router.get('/'+THEME_SCRIPTS_DIRNAME+'/app.js', (req: IRequest, res, next) => {
+		this._router.get('/'+THEME_PUBLIC_DIRNAME+'/'+THEME_SCRIPTS_DIRNAME+'/app.js', (req: IRequest, res, next) => {
 			return this.scripts.render(req, res, next);
 		});
 
 		/**
 		 * render settings.json file
 		 */
-		this._router.get('/'+THEME_SCRIPTS_DIRNAME+'/settings.json', (req: IRequest, res, next) => {
+		this._router.get('/'+THEME_PUBLIC_DIRNAME+'/'+THEME_SCRIPTS_DIRNAME+'/settings.json', (req: IRequest, res, next) => {
 			return this.scripts.settings(req, res, next);
+		});
+
+		/**
+		 * set public path for theme
+		 */
+		this._router.use('/'+THEME_PUBLIC_DIRNAME, (req: IRequest, res, next) => {
+			return express.static(req.theme.publicPath)(req, res, next);
 		});
 
 		/**
@@ -331,13 +312,6 @@ export class Theme extends Filesystem {
 		 */
 		this._router.get('/', (req, res, next) => {
 			return res.render(path.join(req['theme'].path, 'views', 'index'), { title: 'Express' });
-		});
-
-		/**
-		 * set public path for theme
-		 */
-		this._router.use((req: IRequest, res, next) => {
-			return express.static(req.theme.publicPath)(req, res, next);
 		});
 	}
 
@@ -366,6 +340,53 @@ export class Theme extends Filesystem {
 		});
 	}
 
+	/** 
+	 * TODO get variable overwrites from db
+	 * TODO cache file
+	 */ 
+	private getSettingsData(themePath: string, cb): any {
+		var settings_data = {};
+		// shopify like settings_schema.json file
+		var settingsSchemaFilePath = path.join(themePath, THEME_COPNFIG_DIRNAME, 'settings_schema.json');
+		this.readJson(settingsSchemaFilePath, (err, schema) => {
+			if (err && err !== null) { this.debug(err); return cb(err); }
+			for (var i in schema) {
+				if(schema[i].settings) {
+					for (var def in schema[i].settings) {
+						if(schema[i].settings[def].id && typeof(schema[i].settings[def].default) !== 'undefined') {
+							settings_data[schema[i].settings[def].id] = schema[i].settings[def].default;
+						}
+					}
+				}
+			}
+			// replace placeholders
+			for (var key in settings_data) {
+				if(_.isString(settings_data[key])) {
+					this.debug("replace placeholder", settings_data[key]);
+					settings_data[key] = this.strformat(settings_data[key], settings_data);
+				}
+				
+			}
+			return cb(null, settings_data);
+		});
+	}
+
+	/**
+	 * Get theme packageObj of theme dir
+	 */
+	private getPackage(dir: string, callback: IThemePackageCallback) {
+		var packagePath = path.join(dir, THEME_PACKAGE_FILENAME);
+		this.readJson(packagePath, (err: Error, packageObj: IThemePackage) => {
+			if (err && err !== null) { this.debug(err); return callback(err); }
+
+			if(!_.isString(packageObj.version) || !_.isString(packageObj.name)) {
+				return callback(new Error("theme package file broken!"));
+			}
+
+			return callback(null, packageObj);
+		});
+	}
+
 	/**
 	 * set infos for theme in Request Object
 	 */
@@ -378,55 +399,22 @@ export class Theme extends Filesystem {
 
 		var themeName = this._options.theme;
 		var themePath = path.join(req.app.get('views'), THEMES_DIRNAME, themeName);
-		var themePackagePath = path.join(themePath, THEME_PACKAGE_FILENAME);
-		var themePublicPath = path.join(themePath, THEME_PUBLIC_DIRNAME)
-
-		fs.readJson(themePackagePath, (err: Error, themePackage: IThemePackage) => {
-			if(err && err !== null) {
-				this.debug(err);
-				return next(err);
-			}
-			var theme:IThemeRequestObject = {
-				name: themeName,
-				path: themePath,
-				packagePath: themePackagePath,
-				package: themePackage,
-				publicPath: themePublicPath,
-			};
-			req['theme'] = theme;
-			this.debug(req['theme']);
-			return next();
-		});
-	}
-
-	/**
-	 * Get theme packageObj of theme dir
-	 */
-	private getPackage(dir: string, callback: IThemePackageCallback) {
-		var packagePath = path.join(dir, THEME_PACKAGE_FILENAME);
-		fs.stat(packagePath, (err, stat) => {
-			if (err && err !== null) {
-				this.debug("error", err);
-				return callback(err);
-			}
-
-			if (!stat.isFile()) {
-				return callback(new Error(packagePath + " is not a file!"));
-			}
-
-			fs.readJson(packagePath, (err: Error, packageObj: IThemePackage) => {
-				if (err && err !== null) {
-					this.debug("error", err);
-					return callback(err);
-				}
-
-				if(!_.isString(packageObj.version) || !_.isString(packageObj.name)) {
-					return callback(new Error("theme package file broken!"));
-				}
-
-				return callback(null, packageObj);
+		var themePublicPath = path.join(themePath, THEME_PUBLIC_DIRNAME);
+		this.getSettingsData(themePath, (err: Error, settingsData) => {
+			if(err && err !== null) { this.debug(err); return next(err); }
+			this.getPackage(themePath, (err: Error, themePackage: IThemePackage) => {
+				if(err && err !== null) { this.debug(err); return next(err); }
+				var theme:IThemeRequestObject = {
+					name: themeName,
+					path: themePath,
+					settings: settingsData,
+					package: themePackage,
+					publicPath: themePublicPath,
+				};
+				req['theme'] = theme;
+				this.debug(req['theme']);
+				return next();
 			});
-
 		});
 	}
 }

@@ -13,7 +13,7 @@ export interface IThemePackage {
 export interface IThemeRequestObject {
     name: string;
     path: string;
-    packagePath: string;
+    settings: Object;
     package: IThemePackage;
     publicPath: string;
 }
@@ -53,8 +53,7 @@ export declare class Filesystem {
      * Get all valid themes from theme path
      */
     protected fileExists(filePath: string, callback: IBooleanCallback): void;
-    protected getJson(dir: any, cb: any): void;
-    protected getSettings(req: IRequest, cb: any): any;
+    protected readJson(dir: any, cb: any): void;
 }
 export declare class Styles extends Filesystem implements IAssets {
     private sass;
@@ -71,7 +70,6 @@ export declare class Styles extends Filesystem implements IAssets {
 }
 export declare class Scripts extends Filesystem implements IAssets {
     private browserify;
-    private browserifyTransformTools;
     constructor();
     /**
      * build app.js file with browserify
@@ -93,6 +91,7 @@ export declare class Theme extends Filesystem {
     private scripts;
     private views;
     private styles;
+    private strformat;
     options: IThemeOptions;
     router: express.Router;
     constructor(options: IThemeOptions);
@@ -101,11 +100,16 @@ export declare class Theme extends Filesystem {
      */
     getThemes(themesPath: string, callback: IGetDirsCallback): void;
     /**
-     * set infos for theme in Request Object
+     * TODO get variable overwrites from db
+     * TODO cache file
      */
-    private setInfo(req, res, next);
+    private getSettingsData(themePath, cb);
     /**
      * Get theme packageObj of theme dir
      */
     private getPackage(dir, callback);
+    /**
+     * set infos for theme in Request Object
+     */
+    private setInfo(req, res, next);
 }
