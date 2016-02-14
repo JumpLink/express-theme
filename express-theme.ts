@@ -8,7 +8,7 @@ import nedb = require('nedb');
 
 const THEME_PACKAGE_FILENAME = "bower.json";
 const THEME_SETTINGS_SCHEMA_FILENAME = "settings_schema.json";
-const THEME_SETTINGS_DATA_FILENAME = "settings_data.json.db";
+const THEME_SETTINGS_DATA_FILENAME = "settings_data.json";
 const THEMES_DIRNAME = "themes";
 const THEME_PUBLIC_DIRNAME = "assets";
 const THEME_TEMPLATES_DIRNAME = "templates";
@@ -300,6 +300,9 @@ export class Templates extends Filesystem implements IAssets {
 	};
 }
 
+/**
+ * Claas for shopify like theme settings
+ */
 export class Settings extends Filesystem {
     private strformat = require('strformat');
     private db:nedb;
@@ -310,11 +313,11 @@ export class Settings extends Filesystem {
 	 * TODO cache file
      * @see https://docs.shopify.com/themes/theme-development/storefront-editor/settings-schema
 	 */ 
-	get presets(): IThemeSettingsPresets {
+	private get presets(): IThemeSettingsPresets {
         var presets: IThemeSettingsPresets = {
             'Default': {}
         }
-		var schema = this.readJsonSync(this.options.settingsSchemaPath);
+		var schema = this.schema;
         for (var i in schema) {
             if(schema[i].settings) {
                 for (var def in schema[i].settings) {
@@ -327,7 +330,6 @@ export class Settings extends Filesystem {
         // replace placeholders
         for (var key in presets['Default']) {
             if(_.isString(presets['Default'][key])) {
-                this.debug("replace placeholder", presets['Default'][key]);
                 presets['Default'][key] = this.strformat(presets['Default'][key], presets['Default']);
             }
             
@@ -335,64 +337,105 @@ export class Settings extends Filesystem {
         return presets;
 	}
     
-    getCurrent(): any {
-
+    // TODO interface
+    private get schema() {
+        return this.readJsonSync(this.options.settingsSchemaPath);
     }
 
-	constructor(private options:IThemeOptions) {
+	constructor(private options:IThemeOptions, cb: {(err?: Error, data?:IThemeSettingsData)}) {
 		super('theme:settings');
-        this.db = new nedb({ filename: this.options.settingsDataPath, autoload: true });
+        this.db = new nedb({ filename: this.options.settingsDataPath});
+        this.db.loadDatabase((err) => {
+            if(err && err !== null) {
+                this.debug(err);
+                return cb(err);
+            }
+            this.getData((err, data) => {
+                if(err && err !== null) {
+                    this.debug(err);
+                    return cb(err);
+                }
+                this.replaceData(data, (err) => {
+                    if(err && err !== null) {
+                        this.debug(err);
+                        return cb(err);
+                    }
+                    this.debug("settings updated");
+                    return cb(null, data);
+                });
+            });
+        });
 	}
     
+    // get shopify like settings_data object
     public getData(cb: {(err:Error, data?:IThemeSettingsData):any}):any {
         this.debug('getData');
-        this.db.find({}, (err:Error, data:IThemeSettingsData) => {
+        this.db.findOne({}, (err:Error, data:IThemeSettingsData) => {
             if(err && err !== null) {
                 this.debug(err);
                 return cb(err, data);
             }
-             this.debug(data);
-            // overwrite presets result from settings_schema.json file
-            data.presets = this.presets;
+            if(data === null) {
+                data = {
+                    current: {},
+                    presets: {}
+                };
+            }
             if(!data.current) {
                 data.current = {};
             }
+            // overwrite presets result from settings_schema.json file
+            data.presets = this.presets;
             for (var key in data.presets['Default']) {
                 // if new value comes from schema, injet it to current
                 if (!data.current.hasOwnProperty(key)) {
                     data.current[key] = data.presets['Default'][key];
-                    
                 }
             }
             return cb(err, data);
         });
     }
+    
+    private replaceData(data: IThemeSettingsData, cb: {(err?:Error):any}):any {
+        this.debug('getData');
+        this.db.findOne({}, (err:Error, dbResult:IThemeSettingsData) => {
+            if(err && err !== null) { this.debug(err); return cb(err); }
+            this.db.remove({}, {multi: true}, (err, numRemoved) => {
+                if(err && err !== null) { this.debug(err); return cb(err); }
+                this.db.insert(data, (err, newDocs) => {
+                    if(err && err !== null) { this.debug(err); return cb(err); }
+                    return cb(null);
+                });
+            });
+        });
+
+    }
 }
 
 export class Theme extends Filesystem {
-	public router: express.Router = express.Router();
-    
+    public router: express.Router = express.Router();
+
     private package: IThemePackage;
     private settings: Settings;
     private _options: IThemeOptions;
-    
-	private scripts: Scripts = new Scripts();
-	private templates: Templates = new Templates();
-	private styles: Styles = new Styles();
 
-	public set options(options: IThemeOptions) {
-		this._options = options;
+    private scripts: Scripts = new Scripts();
+    private templates: Templates = new Templates();
+    private styles: Styles = new Styles();
+
+    public set options(options: IThemeOptions) {
+        this._options = options;
         this._options.themesPath = path.join(this._options.viewsPath, THEMES_DIRNAME);
-		this._options.path = path.join(this._options.themesPath, this._options.dirname);
+        this._options.path = path.join(this._options.themesPath, this._options.dirname);
         this._options.packagePath = path.join(this._options.path, THEME_PACKAGE_FILENAME);
-		this._options.publicPath = path.join(this._options.path, THEME_PUBLIC_DIRNAME);
+        this._options.publicPath = path.join(this._options.path, THEME_PUBLIC_DIRNAME);
         this._options.configPath = path.join(this._options.path, THEME_CONFIG_DIRNAME);
         this._options.scriptsPath = path.join(this._options.path, THEME_SCRIPTS_DIRNAME);
         this._options.stylesPath = path.join(this._options.path, THEME_STYLES_DIRNAME);
         this._options.templatesPath = path.join(this._options.path, THEME_TEMPLATES_DIRNAME);
         this._options.settingsSchemaPath = path.join(this._options.configPath, THEME_SETTINGS_SCHEMA_FILENAME);
         this._options.settingsDataPath = path.join(this._options.configPath, THEME_SETTINGS_DATA_FILENAME);
-	   this.debug(this._options);
+        this.debug(this._options);
     }
     
     public get options():IThemeOptions {
@@ -403,64 +446,65 @@ export class Theme extends Filesystem {
 		super('theme:theme');
 		this.options = options;
         this.package = this.getPackageSync(this.options.packagePath);
-        this.settings = new Settings(this.options);
+        this.settings = new Settings(this.options, (err, settings_data) => {
 
-		// inject theme stuff to request
-		this.router.use((req: IRequest, res, next) => {
-			this.setRequest(req, res, next);
-		});
+            // inject theme stuff to request
+            this.router.use((req: IRequest, res, next) => {
+                this.setRequest(req, res, next);
+            });
 
-		/**
-		 * render style file
-		 */
-		this.router.get('/'+THEME_PUBLIC_DIRNAME+'/'+THEME_STYLES_DIRNAME+'/app.scss', (req: IRequest, res, next) => {
-			this.debug('styles', req.path);
-            return this.styles.render(req, res, next);
-		});
+            /**
+             * render style file
+             */
+            this.router.get('/'+THEME_PUBLIC_DIRNAME+'/'+THEME_STYLES_DIRNAME+'/app.scss', (req: IRequest, res, next) => {
+                this.debug('styles', req.path);
+                return this.styles.render(req, res, next);
+            });
 
-		/**
-		 * render script file
-		 */
-		this.router.get('/'+THEME_PUBLIC_DIRNAME+'/'+THEME_SCRIPTS_DIRNAME+'/app.js', (req: IRequest, res, next) => {
-			this.debug('scripts', req.path);
-            return this.scripts.render(req, res, next);
-		});
+            /**
+             * render script file
+             */
+            this.router.get('/'+THEME_PUBLIC_DIRNAME+'/'+THEME_SCRIPTS_DIRNAME+'/app.js', (req: IRequest, res, next) => {
+                this.debug('scripts', req.path);
+                return this.scripts.render(req, res, next);
+            });
 
-		/**
-		 * render settings.json file
-		 */
-		this.router.get('/'+THEME_PUBLIC_DIRNAME+'/'+THEME_SCRIPTS_DIRNAME+'/settings.json', (req: IRequest, res, next) => {
-			this.debug('settings.json');
-            return this.scripts.settings(req, res, next);
-		});
+            /**
+             * render settings.json file
+             */
+            this.router.get('/'+THEME_PUBLIC_DIRNAME+'/'+THEME_SCRIPTS_DIRNAME+'/settings.json', (req: IRequest, res, next) => {
+                this.debug('settings.json');
+                return this.scripts.settings(req, res, next);
+            });
 
-		/**
-		 * set public path for theme
-		 */
-		this.router.use('/'+THEME_PUBLIC_DIRNAME, (req: IRequest, res, next) => {
-            this.debug('public');
-			return express.static(req.theme.options.publicPath)(req, res, next);
-		});
+            /**
+             * set public path for theme
+             */
+            this.router.use('/'+THEME_PUBLIC_DIRNAME, (req: IRequest, res, next) => {
+                this.debug('public');
+                return express.static(req.theme.options.publicPath)(req, res, next);
+            });
 
-		/**
-		 * render view file
-		 */
-		this.router.use((req: IRequest, res, next) => {
-			return this.templates.render(req, res, next);
-		});
+            /**
+             * render view file
+             */
+            this.router.use((req: IRequest, res, next) => {
+                return this.templates.render(req, res, next);
+            });
 
-		/**
-		 * render index.jade file
-		 */
-		this.router.get('/', (req:IRequest, res, next) => {
-			return res.render(path.join(req.theme.options.templatesPath, 'index'), { title: 'Express' });
-		});
-        
-		this.router.use((err, req: IRequest, res, next) => {
-            this.debug(req.path, err);
-			res.status(500).send(req.path +'\n'+ err);
-		});
- 
+            /**
+             * render index.jade file
+             */
+            this.router.get('/', (req:IRequest, res, next) => {
+                return res.render(path.join(req.theme.options.templatesPath, 'index'), { title: 'Express' });
+            });
+            
+            this.router.use((err, req: IRequest, res, next) => {
+                this.debug(req.path, err);
+                res.status(500).send(req.path +'\n'+ err);
+            });
+
+        }); 
 	}
 
 	/**

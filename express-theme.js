@@ -13,7 +13,7 @@ var debugModule = require('debug');
 var nedb = require('nedb');
 var THEME_PACKAGE_FILENAME = "bower.json";
 var THEME_SETTINGS_SCHEMA_FILENAME = "settings_schema.json";
-var THEME_SETTINGS_DATA_FILENAME = "settings_data.json.db";
+var THEME_SETTINGS_DATA_FILENAME = "settings_data.json";
 var THEMES_DIRNAME = "themes";
 var THEME_PUBLIC_DIRNAME = "assets";
 var THEME_TEMPLATES_DIRNAME = "templates";
@@ -230,13 +230,37 @@ var Templates = (function (_super) {
     return Templates;
 }(Filesystem));
 exports.Templates = Templates;
+/**
+ * Claas for shopify like theme settings
+ */
 var Settings = (function (_super) {
     __extends(Settings, _super);
-    function Settings(options) {
+    function Settings(options, cb) {
+        var _this = this;
         _super.call(this, 'theme:settings');
         this.options = options;
         this.strformat = require('strformat');
-        this.db = new nedb({ filename: this.options.settingsDataPath, autoload: true });
+        this.db = new nedb({ filename: this.options.settingsDataPath });
+        this.db.loadDatabase(function (err) {
+            if (err && err !== null) {
+                _this.debug(err);
+                return cb(err);
+            }
+            _this.getData(function (err, data) {
+                if (err && err !== null) {
+                    _this.debug(err);
+                    return cb(err);
+                }
+                _this.replaceData(data, function (err) {
+                    if (err && err !== null) {
+                        _this.debug(err);
+                        return cb(err);
+                    }
+                    _this.debug("settings updated");
+                    return cb(null, data);
+                });
+            });
+        });
     }
     Object.defineProperty(Settings.prototype, "presets", {
         /**
@@ -249,7 +273,7 @@ var Settings = (function (_super) {
             var presets = {
                 'Default': {}
             };
-            var schema = this.readJsonSync(this.options.settingsSchemaPath);
+            var schema = this.schema;
             for (var i in schema) {
                 if (schema[i].settings) {
                     for (var def in schema[i].settings) {
@@ -262,7 +286,6 @@ var Settings = (function (_super) {
             // replace placeholders
             for (var key in presets['Default']) {
                 if (_.isString(presets['Default'][key])) {
-                    this.debug("replace placeholder", presets['Default'][key]);
                     presets['Default'][key] = this.strformat(presets['Default'][key], presets['Default']);
                 }
             }
@@ -271,22 +294,34 @@ var Settings = (function (_super) {
         enumerable: true,
         configurable: true
     });
-    Settings.prototype.getCurrent = function () {
-    };
+    Object.defineProperty(Settings.prototype, "schema", {
+        // TODO interface
+        get: function () {
+            return this.readJsonSync(this.options.settingsSchemaPath);
+        },
+        enumerable: true,
+        configurable: true
+    });
+    // get shopify like settings_data object
     Settings.prototype.getData = function (cb) {
         var _this = this;
         this.debug('getData');
-        this.db.find({}, function (err, data) {
+        this.db.findOne({}, function (err, data) {
             if (err && err !== null) {
                 _this.debug(err);
                 return cb(err, data);
             }
-            _this.debug(data);
-            // overwrite presets result from settings_schema.json file
-            data.presets = _this.presets;
+            if (data === null) {
+                data = {
+                    current: {},
+                    presets: {}
+                };
+            }
             if (!data.current) {
                 data.current = {};
             }
+            // overwrite presets result from settings_schema.json file
+            data.presets = _this.presets;
             for (var key in data.presets['Default']) {
                 // if new value comes from schema, injet it to current
                 if (!data.current.hasOwnProperty(key)) {
@@ -294,6 +329,29 @@ var Settings = (function (_super) {
                 }
             }
             return cb(err, data);
+        });
+    };
+    Settings.prototype.replaceData = function (data, cb) {
+        var _this = this;
+        this.debug('getData');
+        this.db.findOne({}, function (err, dbResult) {
+            if (err && err !== null) {
+                _this.debug(err);
+                return cb(err);
+            }
+            _this.db.remove({}, { multi: true }, function (err, numRemoved) {
+                if (err && err !== null) {
+                    _this.debug(err);
+                    return cb(err);
+                }
+                _this.db.insert(data, function (err, newDocs) {
+                    if (err && err !== null) {
+                        _this.debug(err);
+                        return cb(err);
+                    }
+                    return cb(null);
+                });
+            });
         });
     };
     return Settings;
@@ -310,54 +368,55 @@ var Theme = (function (_super) {
         this.styles = new Styles();
         this.options = options;
         this.package = this.getPackageSync(this.options.packagePath);
-        this.settings = new Settings(this.options);
-        // inject theme stuff to request
-        this.router.use(function (req, res, next) {
-            _this.setRequest(req, res, next);
-        });
-        /**
-         * render style file
-         */
-        this.router.get('/' + THEME_PUBLIC_DIRNAME + '/' + THEME_STYLES_DIRNAME + '/app.scss', function (req, res, next) {
-            _this.debug('styles', req.path);
-            return _this.styles.render(req, res, next);
-        });
-        /**
-         * render script file
-         */
-        this.router.get('/' + THEME_PUBLIC_DIRNAME + '/' + THEME_SCRIPTS_DIRNAME + '/app.js', function (req, res, next) {
-            _this.debug('scripts', req.path);
-            return _this.scripts.render(req, res, next);
-        });
-        /**
-         * render settings.json file
-         */
-        this.router.get('/' + THEME_PUBLIC_DIRNAME + '/' + THEME_SCRIPTS_DIRNAME + '/settings.json', function (req, res, next) {
-            _this.debug('settings.json');
-            return _this.scripts.settings(req, res, next);
-        });
-        /**
-         * set public path for theme
-         */
-        this.router.use('/' + THEME_PUBLIC_DIRNAME, function (req, res, next) {
-            _this.debug('public');
-            return express.static(req.theme.options.publicPath)(req, res, next);
-        });
-        /**
-         * render view file
-         */
-        this.router.use(function (req, res, next) {
-            return _this.templates.render(req, res, next);
-        });
-        /**
-         * render index.jade file
-         */
-        this.router.get('/', function (req, res, next) {
-            return res.render(path.join(req.theme.options.templatesPath, 'index'), { title: 'Express' });
-        });
-        this.router.use(function (err, req, res, next) {
-            _this.debug(req.path, err);
-            res.status(500).send(req.path + '\n' + err);
+        this.settings = new Settings(this.options, function (err, settings_data) {
+            // inject theme stuff to request
+            _this.router.use(function (req, res, next) {
+                _this.setRequest(req, res, next);
+            });
+            /**
+             * render style file
+             */
+            _this.router.get('/' + THEME_PUBLIC_DIRNAME + '/' + THEME_STYLES_DIRNAME + '/app.scss', function (req, res, next) {
+                _this.debug('styles', req.path);
+                return _this.styles.render(req, res, next);
+            });
+            /**
+             * render script file
+             */
+            _this.router.get('/' + THEME_PUBLIC_DIRNAME + '/' + THEME_SCRIPTS_DIRNAME + '/app.js', function (req, res, next) {
+                _this.debug('scripts', req.path);
+                return _this.scripts.render(req, res, next);
+            });
+            /**
+             * render settings.json file
+             */
+            _this.router.get('/' + THEME_PUBLIC_DIRNAME + '/' + THEME_SCRIPTS_DIRNAME + '/settings.json', function (req, res, next) {
+                _this.debug('settings.json');
+                return _this.scripts.settings(req, res, next);
+            });
+            /**
+             * set public path for theme
+             */
+            _this.router.use('/' + THEME_PUBLIC_DIRNAME, function (req, res, next) {
+                _this.debug('public');
+                return express.static(req.theme.options.publicPath)(req, res, next);
+            });
+            /**
+             * render view file
+             */
+            _this.router.use(function (req, res, next) {
+                return _this.templates.render(req, res, next);
+            });
+            /**
+             * render index.jade file
+             */
+            _this.router.get('/', function (req, res, next) {
+                return res.render(path.join(req.theme.options.templatesPath, 'index'), { title: 'Express' });
+            });
+            _this.router.use(function (err, req, res, next) {
+                _this.debug(req.path, err);
+                res.status(500).send(req.path + '\n' + err);
+            });
         });
     }
     Object.defineProperty(Theme.prototype, "options", {

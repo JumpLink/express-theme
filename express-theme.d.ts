@@ -115,6 +115,9 @@ export declare class Templates extends Filesystem implements IAssets {
     constructor();
     render(req: IRequest, res: any, next: any): void;
 }
+/**
+ * Claas for shopify like theme settings
+ */
 export declare class Settings extends Filesystem {
     private options;
     private strformat;
@@ -125,12 +128,15 @@ export declare class Settings extends Filesystem {
      * TODO cache file
      * @see https://docs.shopify.com/themes/theme-development/storefront-editor/settings-schema
      */
-    presets: IThemeSettingsPresets;
-    getCurrent(): any;
-    constructor(options: IThemeOptions);
+    private presets;
+    private schema;
+    constructor(options: IThemeOptions, cb: {
+        (err?: Error, data?: IThemeSettingsData);
+    });
     getData(cb: {
         (err: Error, data?: IThemeSettingsData): any;
     }): any;
+    private replaceData(data, cb);
 }
 export declare class Theme extends Filesystem {
     router: express.Router;
