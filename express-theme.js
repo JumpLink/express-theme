@@ -10,15 +10,19 @@ var async = require('async');
 var path = require('path');
 var _ = require('lodash');
 var debugModule = require('debug');
+var nedb = require('nedb');
 var THEME_PACKAGE_FILENAME = "bower.json";
+var THEME_SETTINGS_SCHEMA_FILENAME = "settings_schema.json";
+var THEME_SETTINGS_DATA_FILENAME = "settings_data.json.db";
 var THEMES_DIRNAME = "themes";
 var THEME_PUBLIC_DIRNAME = "assets";
-var THEME_VIEWS_DIRNAME = "views";
+var THEME_TEMPLATES_DIRNAME = "templates";
 var THEME_SCRIPTS_DIRNAME = "scripts";
-var THEME_COPNFIG_DIRNAME = "config";
+var THEME_CONFIG_DIRNAME = "config";
 var THEME_STYLES_DIRNAME = "styles";
 var Filesystem = (function () {
     function Filesystem(debugname) {
+        this.readJsonSync = fs.readJsonSync;
         this.debug = debugModule(debugname);
     }
     /**
@@ -111,9 +115,14 @@ var Styles = (function (_super) {
      */
     Styles.prototype.render = function (req, res, next) {
         var _this = this;
-        var renderFilePath = path.join(req.theme.path, req.path);
+        var renderFilePath = path.join(req.theme.options.path, req.path);
+        this.debug(renderFilePath);
         this.fileExists(renderFilePath, function (err, exists) {
-            if (exists !== true || (err && err !== null)) {
+            if (exists !== true) {
+                _this.debug("Not Found", renderFilePath, req.path);
+                return next();
+            }
+            if (err && err !== null) {
                 return next(err);
             }
             fs.readFile(renderFilePath, 'utf8', function (err, scss_string) {
@@ -124,12 +133,15 @@ var Styles = (function (_super) {
                     if (err && err !== null) {
                         return next(err);
                     }
-                    _this.sass.render({
+                    var options = {
                         data: scss_vars_string + scss_string,
                         includePaths: [
-                            path.join(req.theme.publicPath, THEME_STYLES_DIRNAME),
+                            req.theme.options.stylesPath,
+                            path.join(req.theme.options.path, 'node_modules')
                         ],
-                    }, function (err, result) {
+                    };
+                    _this.debug(options);
+                    _this.sass.render(options, function (err, result) {
                         if (err && err !== null) {
                             return next(err);
                         }
@@ -143,12 +155,18 @@ var Styles = (function (_super) {
         });
     };
     Styles.prototype.settings = function (req, cb) {
+        var _this = this;
         var scss_string = '';
-        for (var key in req.theme.settings) {
-            scss_string += '$' + key + ': ' + req.theme.settings[key] + ';\n';
-        }
-        this.debug(scss_string);
-        return cb(null, scss_string);
+        req.theme.settings.getData(function (err, data) {
+            if (err && err !== null) {
+                return cb(err);
+            }
+            for (var key in data.current) {
+                scss_string += '$' + key + ': ' + data.current[key] + ';\n';
+            }
+            _this.debug(scss_string);
+            return cb(null, scss_string);
+        });
     };
     return Styles;
 }(Filesystem));
@@ -167,99 +185,198 @@ var Scripts = (function (_super) {
      * @see https://github.com/ForbesLindesay/browserify-middleware
      */
     Scripts.prototype.render = function (req, res, next) {
-        this.debug(req.path);
-        var renderFilePath = path.join(req.theme.path, req.path);
+        var renderFilePath = path.join(req.theme.options.path, req.path);
         this.debug(renderFilePath);
         var options = {};
         this.browserify(renderFilePath, options)(req, res, next);
     };
     Scripts.prototype.settings = function (req, res, next) {
-        return res.json(req.theme.settings);
+        req.theme.settings.getData(function (err, data) {
+            if (err && err !== null) {
+                next(err);
+            }
+            return res.json(data.current);
+        });
     };
     return Scripts;
 }(Filesystem));
 exports.Scripts = Scripts;
-var Views = (function (_super) {
-    __extends(Views, _super);
-    function Views() {
-        _super.call(this, 'theme:views');
+var Templates = (function (_super) {
+    __extends(Templates, _super);
+    function Templates() {
+        _super.call(this, 'theme:templates');
     }
-    Views.prototype.render = function (req, res, next) {
-        this.debug(req.path);
-        var renderFilePath = path.join(req.theme.path, THEME_VIEWS_DIRNAME, req.path + '.jade');
+    Templates.prototype.render = function (req, res, next) {
+        var _this = this;
+        var renderFilePath = path.join(req.theme.options.templatesPath, req.path + '.jade');
+        this.debug(renderFilePath);
         this.fileExists(renderFilePath, function (err, exists) {
-            if (exists !== true || (err && err !== null)) {
+            if (exists !== true) {
+                _this.debug("Not Found", renderFilePath, req.path);
                 return next();
             }
-            return res.render(renderFilePath, { title: 'Express' });
+            if (err && err !== null) {
+                return next(err);
+            }
+            req.theme.settings.getData(function (err, data) {
+                if (err && err !== null) {
+                    return next(err);
+                }
+                res.render(renderFilePath, { settings: data.current });
+            });
         });
     };
     ;
-    return Views;
+    return Templates;
 }(Filesystem));
-exports.Views = Views;
+exports.Templates = Templates;
+var Settings = (function (_super) {
+    __extends(Settings, _super);
+    function Settings(options) {
+        _super.call(this, 'theme:settings');
+        this.options = options;
+        this.strformat = require('strformat');
+        this.db = new nedb({ filename: this.options.settingsDataPath, autoload: true });
+    }
+    Object.defineProperty(Settings.prototype, "presets", {
+        /**
+         * Get presents part of shopify like settings_data.json file
+         * TODO get variable overwrites from db
+         * TODO cache file
+         * @see https://docs.shopify.com/themes/theme-development/storefront-editor/settings-schema
+         */
+        get: function () {
+            var presets = {
+                'Default': {}
+            };
+            var schema = this.readJsonSync(this.options.settingsSchemaPath);
+            for (var i in schema) {
+                if (schema[i].settings) {
+                    for (var def in schema[i].settings) {
+                        if (schema[i].settings[def].id && typeof (schema[i].settings[def].default) !== 'undefined') {
+                            presets['Default'][schema[i].settings[def].id] = schema[i].settings[def].default;
+                        }
+                    }
+                }
+            }
+            // replace placeholders
+            for (var key in presets['Default']) {
+                if (_.isString(presets['Default'][key])) {
+                    this.debug("replace placeholder", presets['Default'][key]);
+                    presets['Default'][key] = this.strformat(presets['Default'][key], presets['Default']);
+                }
+            }
+            return presets;
+        },
+        enumerable: true,
+        configurable: true
+    });
+    Settings.prototype.getCurrent = function () {
+    };
+    Settings.prototype.getData = function (cb) {
+        var _this = this;
+        this.debug('getData');
+        this.db.find({}, function (err, data) {
+            if (err && err !== null) {
+                _this.debug(err);
+                return cb(err, data);
+            }
+            _this.debug(data);
+            // overwrite presets result from settings_schema.json file
+            data.presets = _this.presets;
+            if (!data.current) {
+                data.current = {};
+            }
+            for (var key in data.presets['Default']) {
+                // if new value comes from schema, injet it to current
+                if (!data.current.hasOwnProperty(key)) {
+                    data.current[key] = data.presets['Default'][key];
+                }
+            }
+            return cb(err, data);
+        });
+    };
+    return Settings;
+}(Filesystem));
+exports.Settings = Settings;
 var Theme = (function (_super) {
     __extends(Theme, _super);
     function Theme(options) {
         var _this = this;
         _super.call(this, 'theme:theme');
-        this._router = express.Router();
+        this.router = express.Router();
         this.scripts = new Scripts();
-        this.views = new Views();
+        this.templates = new Templates();
         this.styles = new Styles();
-        this.strformat = require('strformat');
         this.options = options;
-        // get infos for theme(s)
-        this._router.use(function (req, res, next) {
-            _this.setInfo(req, res, next);
+        this.package = this.getPackageSync(this.options.packagePath);
+        this.settings = new Settings(this.options);
+        // inject theme stuff to request
+        this.router.use(function (req, res, next) {
+            _this.setRequest(req, res, next);
         });
         /**
          * render style file
          */
-        this._router.get('/' + THEME_PUBLIC_DIRNAME + '/' + THEME_STYLES_DIRNAME + '/app.scss', function (req, res, next) {
+        this.router.get('/' + THEME_PUBLIC_DIRNAME + '/' + THEME_STYLES_DIRNAME + '/app.scss', function (req, res, next) {
+            _this.debug('styles', req.path);
             return _this.styles.render(req, res, next);
         });
         /**
          * render script file
          */
-        this._router.get('/' + THEME_PUBLIC_DIRNAME + '/' + THEME_SCRIPTS_DIRNAME + '/app.js', function (req, res, next) {
+        this.router.get('/' + THEME_PUBLIC_DIRNAME + '/' + THEME_SCRIPTS_DIRNAME + '/app.js', function (req, res, next) {
+            _this.debug('scripts', req.path);
             return _this.scripts.render(req, res, next);
         });
         /**
          * render settings.json file
          */
-        this._router.get('/' + THEME_PUBLIC_DIRNAME + '/' + THEME_SCRIPTS_DIRNAME + '/settings.json', function (req, res, next) {
+        this.router.get('/' + THEME_PUBLIC_DIRNAME + '/' + THEME_SCRIPTS_DIRNAME + '/settings.json', function (req, res, next) {
+            _this.debug('settings.json');
             return _this.scripts.settings(req, res, next);
         });
         /**
          * set public path for theme
          */
-        this._router.use('/' + THEME_PUBLIC_DIRNAME, function (req, res, next) {
-            return express.static(req.theme.publicPath)(req, res, next);
+        this.router.use('/' + THEME_PUBLIC_DIRNAME, function (req, res, next) {
+            _this.debug('public');
+            return express.static(req.theme.options.publicPath)(req, res, next);
         });
         /**
          * render view file
          */
-        this._router.use(function (req, res, next) {
-            return _this.views.render(req, res, next);
+        this.router.use(function (req, res, next) {
+            return _this.templates.render(req, res, next);
         });
         /**
          * render index.jade file
          */
-        this._router.get('/', function (req, res, next) {
-            return res.render(path.join(req['theme'].path, 'views', 'index'), { title: 'Express' });
+        this.router.get('/', function (req, res, next) {
+            return res.render(path.join(req.theme.options.templatesPath, 'index'), { title: 'Express' });
+        });
+        this.router.use(function (err, req, res, next) {
+            _this.debug(req.path, err);
+            res.status(500).send(req.path + '\n' + err);
         });
     }
     Object.defineProperty(Theme.prototype, "options", {
+        get: function () {
+            return this._options;
+        },
         set: function (options) {
             this._options = options;
-        },
-        enumerable: true,
-        configurable: true
-    });
-    Object.defineProperty(Theme.prototype, "router", {
-        get: function () {
-            return this._router;
+            this._options.themesPath = path.join(this._options.viewsPath, THEMES_DIRNAME);
+            this._options.path = path.join(this._options.themesPath, this._options.dirname);
+            this._options.packagePath = path.join(this._options.path, THEME_PACKAGE_FILENAME);
+            this._options.publicPath = path.join(this._options.path, THEME_PUBLIC_DIRNAME);
+            this._options.configPath = path.join(this._options.path, THEME_CONFIG_DIRNAME);
+            this._options.scriptsPath = path.join(this._options.path, THEME_SCRIPTS_DIRNAME);
+            this._options.stylesPath = path.join(this._options.path, THEME_STYLES_DIRNAME);
+            this._options.templatesPath = path.join(this._options.path, THEME_TEMPLATES_DIRNAME);
+            this._options.settingsSchemaPath = path.join(this._options.configPath, THEME_SETTINGS_SCHEMA_FILENAME);
+            this._options.settingsDataPath = path.join(this._options.configPath, THEME_SETTINGS_DATA_FILENAME);
+            this.debug(this._options);
         },
         enumerable: true,
         configurable: true
@@ -289,45 +406,11 @@ var Theme = (function (_super) {
         });
     };
     /**
-     * TODO get variable overwrites from db
-     * TODO cache file
-     */
-    Theme.prototype.getSettingsData = function (themePath, cb) {
-        var _this = this;
-        var settings_data = {};
-        // shopify like settings_schema.json file
-        var settingsSchemaFilePath = path.join(themePath, THEME_COPNFIG_DIRNAME, 'settings_schema.json');
-        this.readJson(settingsSchemaFilePath, function (err, schema) {
-            if (err && err !== null) {
-                _this.debug(err);
-                return cb(err);
-            }
-            for (var i in schema) {
-                if (schema[i].settings) {
-                    for (var def in schema[i].settings) {
-                        if (schema[i].settings[def].id && typeof (schema[i].settings[def].default) !== 'undefined') {
-                            settings_data[schema[i].settings[def].id] = schema[i].settings[def].default;
-                        }
-                    }
-                }
-            }
-            // replace placeholders
-            for (var key in settings_data) {
-                if (_.isString(settings_data[key])) {
-                    _this.debug("replace placeholder", settings_data[key]);
-                    settings_data[key] = _this.strformat(settings_data[key], settings_data);
-                }
-            }
-            return cb(null, settings_data);
-        });
-    };
-    /**
      * Get theme packageObj of theme dir
      */
     Theme.prototype.getPackage = function (dir, callback) {
         var _this = this;
-        var packagePath = path.join(dir, THEME_PACKAGE_FILENAME);
-        this.readJson(packagePath, function (err, packageObj) {
+        this.readJson(dir, function (err, packageObj) {
             if (err && err !== null) {
                 _this.debug(err);
                 return callback(err);
@@ -339,39 +422,26 @@ var Theme = (function (_super) {
         });
     };
     /**
-     * set infos for theme in Request Object
+     * Syncronius version of getPackage
      */
-    Theme.prototype.setInfo = function (req, res, next) {
-        var _this = this;
-        var themesPath = path.join(req.app.get('views'), THEMES_DIRNAME);
-        this.getThemes(themesPath, function (err, themes) {
-            _this.debug("themes", themes);
-        });
-        var themeName = this._options.theme;
-        var themePath = path.join(req.app.get('views'), THEMES_DIRNAME, themeName);
-        var themePublicPath = path.join(themePath, THEME_PUBLIC_DIRNAME);
-        this.getSettingsData(themePath, function (err, settingsData) {
-            if (err && err !== null) {
-                _this.debug(err);
-                return next(err);
-            }
-            _this.getPackage(themePath, function (err, themePackage) {
-                if (err && err !== null) {
-                    _this.debug(err);
-                    return next(err);
-                }
-                var theme = {
-                    name: themeName,
-                    path: themePath,
-                    settings: settingsData,
-                    package: themePackage,
-                    publicPath: themePublicPath,
-                };
-                req['theme'] = theme;
-                _this.debug(req['theme']);
-                return next();
-            });
-        });
+    Theme.prototype.getPackageSync = function (dir) {
+        var packageObj = this.readJsonSync(dir);
+        if (!_.isString(packageObj.version) || !_.isString(packageObj.name)) {
+            throw new Error("theme package file broken!");
+        }
+        return packageObj;
+    };
+    /**
+     * set request IThemeRequestObject for theme in Request Object
+     */
+    Theme.prototype.setRequest = function (req, res, next) {
+        var theme = {
+            options: this.options,
+            settings: this.settings,
+            package: this.package,
+        };
+        req.theme = theme;
+        return next();
     };
     return Theme;
 }(Filesystem));

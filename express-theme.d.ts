@@ -1,21 +1,50 @@
 import * as express from 'express';
+import * as fs from 'fs-extra';
 export interface IThemeOptions {
     /**
      * current theme name
      */
-    theme: string;
+    dirname: string;
+    viewsPath: string;
+    themesPath?: string;
+    path?: string;
+    publicPath?: string;
+    packagePath?: string;
+    configPath?: string;
+    scriptsPath?: string;
+    stylesPath?: string;
+    templatesPath?: string;
+    settingsSchemaPath?: string;
+    settingsDataPath?: string;
 }
 export interface IThemePackage {
     name: string;
     description?: string;
     version: string;
 }
+export interface IThemeSettingsDataValues {
+    [key: string]: number | string | boolean;
+}
+export interface IThemeSettingsPresets {
+    [key: string]: IThemeSettingsDataValues;
+}
+export interface IThemeSettingsData {
+    current: IThemeSettingsDataValues;
+    presets: IThemeSettingsPresets;
+}
 export interface IThemeRequestObject {
-    name: string;
-    path: string;
-    settings: Object;
+    /**
+     * Options for the Theme Class
+     */
+    options: IThemeOptions;
+    /**
+     * Current theme specific settings, e.g. variable overwrites
+     */
+    settings: Settings;
+    /**
+     * Package of the current theme, e.g. name, description and version of theme.
+     */
     package: IThemePackage;
-    publicPath: string;
 }
 export interface IThemePackageCallback {
     (error?: Error, packageObj?: IThemePackage): any;
@@ -54,6 +83,7 @@ export declare class Filesystem {
      */
     protected fileExists(filePath: string, callback: IBooleanCallback): void;
     protected readJson(dir: any, cb: any): void;
+    protected readJsonSync: typeof fs.readJsonSync;
 }
 export declare class Styles extends Filesystem implements IAssets {
     private sass;
@@ -81,35 +111,51 @@ export declare class Scripts extends Filesystem implements IAssets {
     render(req: IRequest, res: any, next: any): any;
     settings(req: IRequest, res: any, next: any): any;
 }
-export declare class Views extends Filesystem implements IAssets {
+export declare class Templates extends Filesystem implements IAssets {
     constructor();
     render(req: IRequest, res: any, next: any): void;
 }
+export declare class Settings extends Filesystem {
+    private options;
+    private strformat;
+    private db;
+    /**
+     * Get presents part of shopify like settings_data.json file
+     * TODO get variable overwrites from db
+     * TODO cache file
+     * @see https://docs.shopify.com/themes/theme-development/storefront-editor/settings-schema
+     */
+    presets: IThemeSettingsPresets;
+    getCurrent(): any;
+    constructor(options: IThemeOptions);
+    getData(cb: {
+        (err: Error, data?: IThemeSettingsData): any;
+    }): any;
+}
 export declare class Theme extends Filesystem {
-    private _router;
+    router: express.Router;
+    private package;
+    private settings;
     private _options;
     private scripts;
-    private views;
+    private templates;
     private styles;
-    private strformat;
     options: IThemeOptions;
-    router: express.Router;
     constructor(options: IThemeOptions);
     /**
      * Get all valid themes from theme path
      */
     getThemes(themesPath: string, callback: IGetDirsCallback): void;
     /**
-     * TODO get variable overwrites from db
-     * TODO cache file
-     */
-    private getSettingsData(themePath, cb);
-    /**
      * Get theme packageObj of theme dir
      */
     private getPackage(dir, callback);
     /**
-     * set infos for theme in Request Object
+     * Syncronius version of getPackage
      */
-    private setInfo(req, res, next);
+    private getPackageSync(dir);
+    /**
+     * set request IThemeRequestObject for theme in Request Object
+     */
+    private setRequest(req, res, next);
 }
